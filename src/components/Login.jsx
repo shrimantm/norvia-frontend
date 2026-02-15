@@ -136,9 +136,6 @@ export default function Login() {
                 : <>Already have a team? <button onClick={() => setMode("login")} className="text-primary font-medium cursor-pointer hover:underline">Login here</button></>
               }
             </p>
-            <p className="text-text-muted text-xs text-center mt-2">
-              💡 Register as <span className="text-primary font-medium">&quot;admin&quot;</span> for the admin panel
-            </p>
           </div>
         </div>
 

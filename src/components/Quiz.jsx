@@ -4,6 +4,7 @@ import { QUIZ_QUESTIONS } from "../data/gameData";
 
 export default function Quiz() {
   const { state, dispatch } = useGame();
+  const [quizStarted, setQuizStarted] = useState(false);
   const [currentQ, setCurrentQ] = useState(0);
   const [selected, setSelected] = useState(null);
   const [showResult, setShowResult] = useState(false);
@@ -21,29 +22,42 @@ export default function Quiz() {
 
   const question = unanswered[currentQ];
 
+  const handleStartQuiz = () => {
+    if (state.balance < 100) {
+      alert("You need at least 100 Carbon Credits to attempt the quiz!");
+      return;
+    }
+    dispatch({ type: "QUIZ_START" });
+    setQuizStarted(true);
+  };
+
   const handleAnswer = (optionIndex) => {
     if (showResult) return;
     setSelected(optionIndex);
     setShowResult(true);
 
     if (optionIndex === question.correct) {
-      dispatch({ type: "QUIZ_REWARD", payload: { questionId: question.id, reward: question.reward } });
-      setFeedback({ correct: true, reward: question.reward });
+      setFeedback({ correct: true, reward: 20, questionId: question.id });
     } else {
-      dispatch({ type: "QUIZ_WRONG", payload: { questionId: question.id } });
-      setFeedback({ correct: false, reward: 0 });
+      setFeedback({ correct: false, reward: -10, questionId: question.id });
     }
   };
 
   const handleNext = () => {
+    // Apply reward/penalty and mark as answered when moving to next
+    if (feedback) {
+      if (feedback.correct) {
+        dispatch({ type: "QUIZ_REWARD", payload: { questionId: feedback.questionId } });
+      } else {
+        dispatch({ type: "QUIZ_WRONG", payload: { questionId: feedback.questionId } });
+      }
+    }
+    
     setSelected(null);
     setShowResult(false);
     setFeedback(null);
-    if (currentQ + 1 >= unanswered.length) {
-      setCurrentQ(0);
-    } else {
-      setCurrentQ(currentQ);
-    }
+    // Always reset to first question since unanswered array will be filtered
+    setCurrentQ(0);
   };
 
   const answeredCount = state.answeredQuestions.length;
@@ -75,8 +89,44 @@ export default function Quiz() {
         </div>
       </div>
 
-      {/* Question */}
-      {unanswered.length === 0 ? (
+      {/* Entry Fee Screen */}
+      {!quizStarted ? (
+        <div className="bg-surface rounded-2xl p-12 border border-border text-center">
+          <div className="text-6xl mb-4">📝</div>
+          <h2 className="text-2xl font-bold text-white mb-2">Quiz Challenge</h2>
+          <p className="text-text-muted mb-6">Test your climate knowledge and earn rewards!</p>
+          <div className="bg-surface-light rounded-xl p-6 mb-6 max-w-md mx-auto">
+            <div className="space-y-3 text-left">
+              <div className="flex items-center justify-between">
+                <span className="text-text-muted">Entry Fee:</span>
+                <span className="text-danger font-bold">-100 CC</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-text-muted">Correct Answer:</span>
+                <span className="text-primary font-bold">+20 CC</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-text-muted">Wrong Answer:</span>
+                <span className="text-danger font-bold">-10 CC</span>
+              </div>
+              <div className="border-t border-border pt-3 mt-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-white font-medium">Total Questions:</span>
+                  <span className="text-white font-bold">{unanswered.length}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleStartQuiz}
+            disabled={state.balance < 100}
+            className="px-8 py-3 bg-gradient-to-r from-primary to-secondary text-white font-semibold rounded-xl hover:opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {state.balance < 100 ? "Insufficient Balance" : "Start Quiz (Pay 100 CC)"}
+          </button>
+          <p className="text-text-muted text-sm mt-4">Your Balance: {state.balance} CC</p>
+        </div>
+      ) : unanswered.length === 0 ? (
         <div className="bg-surface rounded-2xl p-12 border border-border text-center">
           <div className="text-6xl mb-4">🎉</div>
           <h2 className="text-2xl font-bold text-white mb-2">All Done!</h2>
@@ -90,7 +140,7 @@ export default function Quiz() {
             <span className="inline-flex px-3 py-1 bg-secondary/20 text-secondary rounded-full text-xs font-medium">
               {question.category}
             </span>
-            <span className="text-accent font-medium text-sm">+{question.reward} CC</span>
+            <span className="text-primary font-medium text-sm">+20 / -10 CC</span>
           </div>
 
           {/* Question Text */}
@@ -152,7 +202,7 @@ export default function Quiz() {
                     {feedback.correct ? "Correct!" : "Wrong Answer"}
                   </p>
                   <p className="text-text-muted text-sm">
-                    {feedback.correct ? `+${feedback.reward} Carbon Credits earned!` : "No credits awarded. Better luck next time!"}
+                    {feedback.correct ? `+${feedback.reward} Carbon Credits earned!` : `${feedback.reward} Carbon Credits deducted!`}
                   </p>
                 </div>
               </div>

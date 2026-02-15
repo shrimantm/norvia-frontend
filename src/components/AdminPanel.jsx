@@ -1,12 +1,16 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useGame } from "../context/GameContext";
+import { apiNextNews, apiResetMarket, apiGetMarketData, apiFreezeItem, apiAdjustPrice, apiTriggerEvent, apiFreezeMarket } from "../api";
 
 export default function AdminPanel() {
   const { state, dispatch } = useGame();
 
-  // Stock price controls
-  const [selectedStock, setSelectedStock] = useState(state.stocks[0]?.id || 1);
-  const [newPrice, setNewPrice] = useState("");
+  // Stock adjust controls
+  const [selectedStock, setSelectedStock] = useState("");
+  const [adjustPercent, setAdjustPercent] = useState("");
+  
+  // Market freeze control
+  const [freezeDuration, setFreezeDuration] = useState("");
 
   // Quiz question form
   const [qForm, setQForm] = useState({
@@ -18,21 +22,102 @@ export default function AdminPanel() {
   });
 
   const [notification, setNotification] = useState(null);
+  const [marketInfo, setMarketInfo] = useState(null);
+  const [newsLoading, setNewsLoading] = useState(false);
+
+  const fetchMarketInfo = useCallback(async () => {
+    try {
+      const data = await apiGetMarketData();
+      setMarketInfo(data);
+      if (!selectedStock && data.stocks.length > 0) {
+        setSelectedStock(data.stocks[0].id);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    fetchMarketInfo();
+  }, [fetchMarketInfo]);
+
+  const handleNextNews = async () => {
+    setNewsLoading(true);
+    try {
+      const result = await apiNextNews();
+      showNotification(result.message, "success");
+      await fetchMarketInfo();
+    } catch (err) {
+      showNotification(err.message, "error");
+    } finally {
+      setNewsLoading(false);
+    }
+  };
+
+  const handleResetMarket = async () => {
+    if (!window.confirm("Reset market to round 0 and clear ALL portfolios and admin overrides?")) return;
+    try {
+      const result = await apiResetMarket();
+      showNotification(result.message, "success");
+      await fetchMarketInfo();
+    } catch (err) {
+      showNotification(err.message, "error");
+    }
+  };
+
+  const handleFreeze = async (itemId, freeze) => {
+    try {
+      const result = await apiFreezeItem(itemId, freeze);
+      showNotification(result.message, "success");
+      await fetchMarketInfo();
+    } catch (err) {
+      showNotification(err.message, "error");
+    }
+  };
+
+  const handleAdjust = async () => {
+    const pct = parseFloat(adjustPercent);
+    if (isNaN(pct)) {
+      showNotification("Enter a valid percentage!", "error");
+      return;
+    }
+    try {
+      const result = await apiAdjustPrice(selectedStock, pct);
+      showNotification(result.message, "success");
+      setAdjustPercent("");
+      await fetchMarketInfo();
+    } catch (err) {
+      showNotification(err.message, "error");
+    }
+  };
+
+  const handleEvent = async (event) => {
+    try {
+      const result = await apiTriggerEvent(event);
+      showNotification(result.message, "success");
+      await fetchMarketInfo();
+    } catch (err) {
+      showNotification(err.message, "error");
+    }
+  };
+
+  const handleMarketFreeze = async () => {
+    const duration = parseInt(freezeDuration);
+    if (isNaN(duration) || duration < 0) {
+      showNotification("Enter a valid duration (0 to unfreeze)!", "error");
+      return;
+    }
+    try {
+      const result = await apiFreezeMarket(duration);
+      showNotification(result.message, "success");
+      setFreezeDuration("");
+      await fetchMarketInfo();
+    } catch (err) {
+      showNotification(err.message, "error");
+    }
+  };
 
   const showNotification = (message, type = "success") => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
-  };
-
-  const handleSetPrice = () => {
-    const price = parseFloat(newPrice);
-    if (isNaN(price) || price <= 0) {
-      showNotification("Enter a valid price!", "error");
-      return;
-    }
-    dispatch({ type: "ADMIN_SET_PRICE", payload: { stockId: selectedStock, newPrice: price } });
-    showNotification(`Stock price updated to ${price} CC`);
-    setNewPrice("");
   };
 
   const handleAddQuestion = (e) => {
@@ -81,64 +166,241 @@ export default function AdminPanel() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Stock Price Control */}
+        {/* ─── News Round Control ─── */}
+        <div className="bg-surface rounded-2xl p-6 border border-border lg:col-span-2">
+          <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+            📰 Market News Control
+          </h3>
+          <div className="flex flex-wrap items-center gap-4 mb-4">
+            <div className="bg-surface-light rounded-xl px-5 py-3 border border-border">
+              <p className="text-text-muted text-xs">Current Round</p>
+              <p className="text-white font-bold text-2xl">
+                {marketInfo ? marketInfo.currentRound : "..."} <span className="text-text-muted text-sm font-normal">/ {marketInfo ? marketInfo.totalRounds : 4}</span>
+              </p>
+            </div>
+            <button
+              onClick={handleNextNews}
+              disabled={newsLoading || (marketInfo && marketInfo.currentRound >= 4)}
+              className={`px-6 py-3 rounded-xl font-medium text-white transition-all cursor-pointer ${
+                marketInfo && marketInfo.currentRound >= 4
+                  ? "bg-gray-600 cursor-not-allowed"
+                  : "bg-gradient-to-r from-primary to-secondary hover:opacity-90"
+              }`}
+            >
+              {newsLoading ? "Releasing..." : marketInfo && marketInfo.currentRound >= 4 ? "All Rounds Released" : `Release News Round ${(marketInfo?.currentRound || 0) + 1}`}
+            </button>
+            <button
+              onClick={handleResetMarket}
+              className="px-6 py-3 bg-danger text-white rounded-xl font-medium hover:opacity-90 transition-all cursor-pointer"
+            >
+              Reset Market
+            </button>
+          </div>
+          {/* Round progress bar */}
+          <div className="w-full bg-surface-light rounded-full h-3">
+            <div
+              className="bg-gradient-to-r from-primary to-secondary h-3 rounded-full transition-all duration-500"
+              style={{ width: `${((marketInfo?.currentRound || 0) / 4) * 100}%` }}
+            />
+          </div>
+          <div className="flex justify-between mt-1 text-xs text-text-muted">
+            <span>LTP</span>
+            <span>Round 1</span>
+            <span>Round 2</span>
+            <span>Round 3</span>
+            <span>Round 4</span>
+          </div>
+        </div>
+
+        {/* ─── Market Events ─── */}
+        <div className="bg-surface rounded-2xl p-6 border border-border lg:col-span-2">
+          <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+            ⚡ Market Events
+          </h3>
+          <div className="flex flex-wrap gap-3 mb-3">
+            <button onClick={() => handleEvent("crash")} className="px-5 py-2.5 bg-danger text-white rounded-xl font-medium hover:opacity-90 transition-all cursor-pointer">
+              💥 Trigger Crash (-15%)
+            </button>
+            <button onClick={() => handleEvent("recovery")} className="px-5 py-2.5 bg-primary text-white rounded-xl font-medium hover:opacity-90 transition-all cursor-pointer">
+              📈 Trigger Recovery (+10%)
+            </button>
+            <button onClick={() => handleEvent("boom")} className="px-5 py-2.5 bg-secondary text-white rounded-xl font-medium hover:opacity-90 transition-all cursor-pointer">
+              🚀 Trigger Boom (+20%)
+            </button>
+            <button onClick={() => handleEvent(null)} className="px-5 py-2.5 bg-surface-light text-text-muted border border-border rounded-xl font-medium hover:text-white transition-all cursor-pointer">
+              ✕ Clear Event
+            </button>
+          </div>
+          {marketInfo?.activeEvent && (
+            <div className={`rounded-xl px-4 py-3 text-sm font-medium ${
+              marketInfo.activeEvent === "crash" ? "bg-danger/20 text-danger" :
+              marketInfo.activeEvent === "recovery" ? "bg-primary/20 text-primary" :
+              "bg-secondary/20 text-secondary"
+            }`}>
+              Active: {marketInfo.activeEvent.toUpperCase()} event on Round {marketInfo.eventRound}
+            </div>
+          )}
+        </div>
+
+        {/* ─── Freeze All Market ─── */}
+        <div className="bg-surface rounded-2xl p-6 border border-border lg:col-span-2">
+          <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+            ❄️ Freeze Entire Market
+          </h3>
+          <p className="text-text-muted text-xs mb-3">Temporarily disable all trading across the market. Set duration to 0 to unfreeze immediately.</p>
+          
+          {marketInfo?.marketFrozen && (
+            <div className="bg-blue-500/20 text-blue-400 rounded-xl px-4 py-3 mb-4 text-sm font-medium">
+              🔒 Market is currently FROZEN{marketInfo.marketFreezeUntil && ` until ${new Date(marketInfo.marketFreezeUntil).toLocaleString()}`}
+            </div>
+          )}
+          
+          <div className="flex flex-wrap gap-3">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={freezeDuration}
+              onChange={(e) => setFreezeDuration(e.target.value)}
+              placeholder="Duration in minutes"
+              className="flex-1 min-w-[200px] px-4 py-3 bg-surface-light border border-border rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            <button
+              onClick={handleMarketFreeze}
+              className="px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors cursor-pointer"
+            >
+              {marketInfo?.marketFrozen ? "Update Freeze" : "Freeze Market"}
+            </button>
+            {marketInfo?.marketFrozen && (
+              <button
+                onClick={async () => {
+                  try {
+                    const result = await apiFreezeMarket(0);
+                    showNotification(result.message, "success");
+                    setFreezeDuration("");
+                    await fetchMarketInfo();
+                  } catch (err) {
+                    showNotification(err.message, "error");
+                  }
+                }}
+                className="px-6 py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary-dark transition-colors cursor-pointer"
+              >
+                Unfreeze Now
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* ─── Adjust Stock % ─── */}
         <div className="bg-surface rounded-2xl p-6 border border-border">
           <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
-            📈 Control Stock Prices
+            🎯 Adjust Stock/Commodity %
           </h3>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-text-muted mb-2">Select Stock</label>
+              <label className="block text-sm font-medium text-text-muted mb-2">Select Item</label>
               <select
                 value={selectedStock}
-                onChange={(e) => setSelectedStock(parseInt(e.target.value))}
+                onChange={(e) => setSelectedStock(e.target.value)}
                 className="w-full px-4 py-3 bg-surface-light border border-border rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-primary"
               >
-                {state.stocks.map((s) => (
+                {marketInfo && [...marketInfo.stocks, ...marketInfo.commodities].map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.symbol} - {s.name} (Current: {s.price.toFixed(2)} CC)
+                    {s.symbol} — {s.currentPrice.toFixed(2)} CC ({s.totalChangePercent >= 0 ? "+" : ""}{s.totalChangePercent}%)
+                    {s.isFrozen ? " 🧊 FROZEN" : ""}
                   </option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-text-muted mb-2">New Price (CC)</label>
+              <label className="block text-sm font-medium text-text-muted mb-2">Extra % Adjustment</label>
               <div className="flex gap-3">
                 <input
                   type="number"
-                  min="1"
-                  step="0.01"
-                  value={newPrice}
-                  onChange={(e) => setNewPrice(e.target.value)}
-                  placeholder="Enter new price"
+                  step="1"
+                  value={adjustPercent}
+                  onChange={(e) => setAdjustPercent(e.target.value)}
+                  placeholder="e.g. +5 or -10"
                   className="flex-1 px-4 py-3 bg-surface-light border border-border rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-primary"
                 />
                 <button
-                  onClick={handleSetPrice}
+                  onClick={handleAdjust}
                   className="px-6 py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary-dark transition-colors cursor-pointer"
                 >
-                  Update
+                  Apply
                 </button>
               </div>
+              <p className="text-text-muted text-xs mt-1">Adds extra percentage on top of the news-based change for the current round</p>
             </div>
+          </div>
+        </div>
 
-            {/* Stock list preview */}
-            <div className="mt-4 space-y-2">
-              {state.stocks.map((s) => (
-                <div key={s.id} className="flex items-center justify-between bg-surface-light rounded-xl px-4 py-3">
-                  <div>
-                    <span className="text-white font-medium text-sm">{s.symbol}</span>
-                    <span className="text-text-muted text-xs ml-2">{s.name}</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-white font-medium">{s.price.toFixed(2)} CC</span>
-                    <span className={`ml-2 text-xs ${s.change >= 0 ? "text-primary" : "text-danger"}`}>
-                      {s.change >= 0 ? "+" : ""}{s.change.toFixed(2)}
-                    </span>
-                  </div>
+        {/* ─── Freeze Controls ─── */}
+        <div className="bg-surface rounded-2xl p-6 border border-border">
+          <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+            🧊 Freeze / Unfreeze Items
+          </h3>
+          <p className="text-text-muted text-xs mb-3">Frozen items cannot be bought or sold. Click to toggle.</p>
+          <div className="space-y-2 max-h-72 overflow-y-auto">
+            {marketInfo && [...marketInfo.stocks, ...marketInfo.commodities].map((s) => (
+              <div key={s.id} className="flex items-center justify-between bg-surface-light rounded-xl px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-white font-medium text-sm">{s.symbol}</span>
+                  <span className="text-text-muted text-xs">{s.currentPrice.toFixed(2)} CC</span>
+                  {s.isFrozen && <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full">FROZEN</span>}
                 </div>
-              ))}
-            </div>
+                <button
+                  onClick={() => handleFreeze(s.id, !s.isFrozen)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
+                    s.isFrozen
+                      ? "bg-primary text-white hover:bg-primary-dark"
+                      : "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+                  }`}
+                >
+                  {s.isFrozen ? "Unfreeze" : "Freeze"}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* ─── Stock/Commodity Overview ─── */}
+        <div className="bg-surface rounded-2xl p-6 border border-border lg:col-span-2">
+          <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+            📊 Market Overview (All items start at 100 CC)
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-text-muted text-left border-b border-border">
+                  <th className="pb-3 font-medium">Symbol</th>
+                  <th className="pb-3 font-medium">Name</th>
+                  <th className="pb-3 font-medium text-right">Price</th>
+                  <th className="pb-3 font-medium text-right">Round Chg</th>
+                  <th className="pb-3 font-medium text-right">Total Chg</th>
+                  <th className="pb-3 font-medium text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {marketInfo && [...marketInfo.stocks, ...marketInfo.commodities].map((s) => (
+                  <tr key={s.id} className="border-b border-border/30 hover:bg-surface-light/50 transition-colors">
+                    <td className="py-2.5 text-white font-medium">{s.symbol}</td>
+                    <td className="py-2.5 text-text-muted text-xs">{s.name}</td>
+                    <td className="py-2.5 text-right text-white font-medium">{s.currentPrice.toFixed(2)} CC</td>
+                    <td className={`py-2.5 text-right font-medium ${s.changePercent >= 0 ? "text-primary" : "text-danger"}`}>
+                      {s.changePercent >= 0 ? "+" : ""}{s.changePercent}%
+                    </td>
+                    <td className={`py-2.5 text-right font-medium ${s.totalChangePercent >= 0 ? "text-primary" : "text-danger"}`}>
+                      {s.totalChangePercent >= 0 ? "+" : ""}{s.totalChangePercent}%
+                    </td>
+                    <td className="py-2.5 text-center">
+                      {s.isFrozen ? <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full">🧊 Frozen</span>
+                        : <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full">Active</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
 

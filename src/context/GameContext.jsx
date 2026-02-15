@@ -30,9 +30,9 @@ const initialState = {
   balance: 1000,
   balanceHistory: [{ time: "Start", value: 1000 }],
 
-  // Stocks
+  // Stocks (kept for legacy, but market page now uses backend)
   stocks: INITIAL_STOCKS,
-  portfolio: [], // { stockId, quantity, avgPrice }
+  portfolio: [],
 
   // Quiz
   quizScore: 0,
@@ -51,21 +51,6 @@ const initialState = {
   // Transaction log
   transactions: [],
 };
-
-function simulateStockPrices(stocks) {
-  return stocks.map((stock) => {
-    const volatility = 0.08;
-    const randomChange = (Math.random() - 0.48) * volatility * stock.price;
-    const newPrice = Math.max(5, Math.round((stock.price + randomChange) * 100) / 100);
-    const change = Math.round((newPrice - stock.price) * 100) / 100;
-    return {
-      ...stock,
-      price: newPrice,
-      change,
-      history: [...stock.history.slice(-19), newPrice],
-    };
-  });
-}
 
 function gameReducer(state, action) {
   switch (action.type) {
@@ -98,6 +83,13 @@ function gameReducer(state, action) {
 
     case "SET_LEADERBOARD":
       return { ...state, leaderboard: action.payload };
+
+    // Set balance from backend (used by market buy/sell)
+    case "SET_BALANCE": {
+      const newBalance = action.payload;
+      const newHistory = [...state.balanceHistory, { time: `Tx${state.transactions.length + 1}`, value: newBalance }];
+      return { ...state, balance: newBalance, balanceHistory: newHistory };
+    }
 
     case "BUY_STOCK": {
       const { stockId, quantity } = action.payload;
@@ -152,8 +144,21 @@ function gameReducer(state, action) {
       };
     }
 
+    case "QUIZ_START": {
+      const entryFee = 100;
+      const newBalance = state.balance - entryFee;
+      const newHistory = [...state.balanceHistory, { time: `Quiz Entry`, value: newBalance }];
+      return {
+        ...state,
+        balance: newBalance,
+        balanceHistory: newHistory,
+        transactions: [...state.transactions, { type: "QUIZ", stock: "Quiz Entry Fee", quantity: 1, amount: -entryFee, time: new Date().toLocaleTimeString() }],
+      };
+    }
+
     case "QUIZ_REWARD": {
-      const { questionId, reward } = action.payload;
+      const { questionId } = action.payload;
+      const reward = 20;
       if (state.answeredQuestions.includes(questionId)) return state;
       const newBalance = state.balance + reward;
       const newHistory = [...state.balanceHistory, { time: `Quiz`, value: newBalance }];
@@ -163,16 +168,22 @@ function gameReducer(state, action) {
         quizScore: state.quizScore + reward,
         answeredQuestions: [...state.answeredQuestions, questionId],
         balanceHistory: newHistory,
-        transactions: [...state.transactions, { type: "QUIZ", stock: "Quiz Reward", quantity: 1, amount: reward, time: new Date().toLocaleTimeString() }],
+        transactions: [...state.transactions, { type: "QUIZ", stock: "Quiz Correct", quantity: 1, amount: reward, time: new Date().toLocaleTimeString() }],
       };
     }
 
     case "QUIZ_WRONG": {
       const { questionId } = action.payload;
+      const penalty = 10;
       if (state.answeredQuestions.includes(questionId)) return state;
+      const newBalance = state.balance - penalty;
+      const newHistory = [...state.balanceHistory, { time: `Quiz`, value: newBalance }];
       return {
         ...state,
+        balance: newBalance,
         answeredQuestions: [...state.answeredQuestions, questionId],
+        balanceHistory: newHistory,
+        transactions: [...state.transactions, { type: "QUIZ", stock: "Quiz Wrong", quantity: 1, amount: -penalty, time: new Date().toLocaleTimeString() }],
       };
     }
 
@@ -203,7 +214,7 @@ function gameReducer(state, action) {
     }
 
     case "UPDATE_STOCKS":
-      return { ...state, stocks: simulateStockPrices(state.stocks) };
+      return state; // no-op — stock prices now come from backend
 
     case "ADMIN_SET_PRICE": {
       const { stockId, newPrice } = action.payload;
@@ -249,7 +260,6 @@ export function GameProvider({ children }) {
   useEffect(() => {
     if (state.team) {
       dispatch({ type: "UPDATE_LEADERBOARD" });
-      // Sync to backend (fire-and-forget)
       if (state.teamId) {
         apiUpdateTeam(state.teamId, state.balance, state.quizScore).catch(() => {});
       }
@@ -273,15 +283,6 @@ export function GameProvider({ children }) {
     const interval = setInterval(fetchLeaderboard, 15000);
     return () => clearInterval(interval);
   }, [state.team, fetchLeaderboard]);
-
-  // Stock price simulation every 10 seconds
-  useEffect(() => {
-    if (!state.team) return;
-    const interval = setInterval(() => {
-      dispatch({ type: "UPDATE_STOCKS" });
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [state.team]);
 
   return (
     <GameContext.Provider value={{ state, dispatch }}>
